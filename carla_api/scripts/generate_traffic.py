@@ -8,18 +8,13 @@
 
 """Example script to generate traffic in the simulation"""
 
-import glob
-import os
-import sys
+import argparse
+import logging
 import time
 
 import carla
-
-from carla import VehicleLightState as vls
-
-import argparse
-import logging
 from numpy import random
+
 
 def get_actor_blueprints(world, filter, generation):
     bps = world.get_blueprint_library().filter(filter)

@@ -5,7 +5,6 @@ import re
 import math
 import os
 import datetime
-import numpy as np
 
 import pygame
 from pygame.locals import KMOD_CTRL

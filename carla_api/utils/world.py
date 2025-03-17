@@ -129,40 +129,65 @@ class World(object):
             yaw = transform.rotation.yaw
             vel = vehicle.get_velocity()
             if vehicle.id != self.player.id:
-                vehicle_dist.append((dist(loc), vehicle))
+                vehicle_dist.append((dist(loc), vehicle.id, vehicle))
             dim = vehicle.bounding_box.extent * 2
             traj = np.array([loc.x, loc.y, loc.z, dim.x, dim.y, dim.z, math.radians(yaw), vel.x, vel.y, 1])
             self._trajectories[vehicle.id].append(traj)
 
+        vehicle_dist.sort()
+
         nearby_vehicles = []
 
-        for dist, vehicle in sorted(vehicle_dist):
+        for dist, _, vehicle in vehicle_dist:
             if dist > 100.0:
                 break
             vehicle_type = get_actor_display_name(vehicle, truncate=22)
             nearby_vehicles.append((dist, vehicle_type))
 
+        track_ids = [self.player.id]
+        for i in range(min(7, len(vehicle_dist))):  # find the 7 closest vehicles
+            track_ids.append(vehicle_dist[i][1])
+
         self._mtr_cnt += 1
-        track_infos = None
+        info = None
         if self._mtr_cnt == 5:
-            update = True
-            track_infos = self.decode_tracks()
+            info = self.parse_carla_data(track_ids)
+            info['vehicle_ids'] = track_ids
             self._mtr_cnt = 0
 
         self.hud.tick(self, clock, nearby_vehicles)
-        return track_infos
+        return info
 
-    def decode_tracks(self):
+    def parse_carla_data(self, track_ids):
+        info = {}
+        info['scenario_id'] = "scenario_0"
+        info['timestamps_seconds'] = np.linspace(0.0, 9.0, 91)  # list of int of shape (91)
+        info['current_time_index'] = 10  # int, 10
+        info['sdc_track_index'] = 0  # set ego vehicle index to be 0
+        info['objects_of_interest'] = []  # list, could be empty list
+
+        info['tracks_to_predict'] = {
+            'track_index': list(range(len(track_ids))),
+            'difficulty': [0] * len(track_ids)
+        }
+
+        info['tracks_to_predict']['object_type'] = ['TYPE_VEHICLE'] * len(track_ids)
+
+        info['track_infos'] = self.decode_tracks(track_ids)
+        return info
+
+    def decode_tracks(self, track_ids):
         track_infos = {
             'object_id': [],  # {0: unset, 1: vehicle, 2: pedestrian, 3: cyclist, 4: others}
             'object_type': [],
             'trajs': []
         }
-        for id, trajs in self._trajectories.items():
+        for i, object_id in enumerate(track_ids):
+            trajs = self._trajectories[object_id]
             full_traj = np.zeros((11, 10))
             cur_traj = np.stack(trajs, axis=0)
             full_traj[-len(cur_traj):] = cur_traj
-            track_infos['object_id'].append(id)
+            track_infos['object_id'].append(object_id)
             track_infos['object_type'].append('TYPE_VEHICLE')
             track_infos['trajs'].append(full_traj)
 

@@ -1,9 +1,8 @@
 import numpy as np
 import torch
 
+from mtr.datasets.waymo.waymo_types import lane_type, road_line_type
 from mtr.utils import common_utils
-from mtr.datasets.waymo.waymo_types import object_type, lane_type, road_line_type, road_edge_type, signal_state, \
-    polyline_type
 
 
 def get_polyline_dir(polyline):
@@ -176,28 +175,6 @@ def decode_map_features(map, routing_graph):
         print('Empty polylines: ')
     map_infos['all_polylines'] = polylines
     return map_infos, dynamic_map_infos
-
-
-def parse_carla_data():
-    info = {}
-    info['scenario_id'] = "scenario_0"
-    info['timestamps_seconds'] = np.linspace(0.0, 9.0, 91)  # list of int of shape (91)
-    info['current_time_index'] = 10  # int, 10
-    info['sdc_track_index'] = 0  # set ego vehicle index to be 0
-    info['objects_of_interest'] = []  # list, could be empty list
-
-    info['tracks_to_predict'] = {
-        'track_index': [0],
-        'difficulty': [0]
-    }
-
-    info['tracks_to_predict']['object_type'] = ['TYPE_VEHICLE']
-
-
-
-    # TODO: track_infos = decode_tracks_info(scenario.tracks)
-
-    return info
 
 
 def create_scene_level_data(info, dataset_cfg):
@@ -610,3 +587,58 @@ def generate_batch_polylines_from_map(polylines, point_sampled_interval=1, vecto
     # center_dist = (polyline_center - ret_polylines[:, 0, 0:2]).norm(dim=-1)
     # assert center_dist.max() < 10
     return ret_polylines, ret_polylines_mask
+
+
+def generate_prediction_dicts(batch_dict):
+    """
+
+    Args:
+        batch_dict:
+            pred_scores: (num_center_objects, num_modes)
+            pred_trajs: (num_center_objects, num_modes, num_timestamps, 7)
+
+          input_dict:
+            center_objects_world: (num_center_objects, 10)
+            center_objects_type: (num_center_objects)
+            center_objects_id: (num_center_objects)
+            center_gt_trajs_src: (num_center_objects, num_timestamps, 10)
+    """
+    input_dict = batch_dict['input_dict']
+
+    pred_scores = batch_dict['pred_scores']
+    pred_trajs = batch_dict['pred_trajs']
+    center_objects_world = input_dict['center_objects_world'].type_as(pred_trajs)
+
+    num_center_objects, num_modes, num_timestamps, num_feat = pred_trajs.shape
+    assert num_feat == 7
+
+    pred_trajs_world = common_utils.rotate_points_along_z(
+        points=pred_trajs.view(num_center_objects, num_modes * num_timestamps, num_feat),
+        angle=center_objects_world[:, 6].view(num_center_objects)
+    ).view(num_center_objects, num_modes, num_timestamps, num_feat)
+    pred_trajs_world[:, :, :, 0:2] += center_objects_world[:, None, None, 0:2]
+
+    pred_dict_list = []
+    batch_sample_count = batch_dict['batch_sample_count']
+    start_obj_idx = 0
+    for bs_idx in range(batch_dict['batch_size']):
+        cur_scene_pred_list = []
+        for obj_idx in range(start_obj_idx, start_obj_idx + batch_sample_count[bs_idx]):
+            single_pred_dict = {
+                'scenario_id': input_dict['scenario_id'][obj_idx],
+                'pred_trajs': pred_trajs_world[obj_idx, :, :, 0:2].cpu().numpy(),
+                'pred_scores': pred_scores[obj_idx, :].cpu().numpy(),
+                'object_id': input_dict['center_objects_id'][obj_idx],
+                'object_type': input_dict['center_objects_type'][obj_idx],
+                'gt_trajs': input_dict['center_gt_trajs_src'][obj_idx].cpu().numpy(),
+                'track_index_to_predict': input_dict['track_index_to_predict'][obj_idx].cpu().numpy()
+            }
+            cur_scene_pred_list.append(single_pred_dict)
+
+        pred_dict_list.append(cur_scene_pred_list)
+        start_obj_idx += batch_sample_count[bs_idx]
+
+    assert start_obj_idx == num_center_objects
+    assert len(pred_dict_list) == batch_dict['batch_size']
+
+    return pred_dict_list

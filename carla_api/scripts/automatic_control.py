@@ -11,36 +11,25 @@
 from __future__ import print_function
 
 import argparse
-import collections
-import datetime
 import logging
-import math
 import os
-import numpy.random as random
-import sys
-import weakref
-import numpy as np
-import torch
-import pygame
-import lanelet2
-from lanelet2.routing import RoutingGraph
+from pathlib import Path
 
 import carla
+import lanelet2
+import numpy as np
+import numpy.random as random
+import pygame
+import torch
+from lanelet2.routing import RoutingGraph
 
-from carla_api.agents.navigation.behavior_agent import BehaviorAgent  # pylint: disable=import-error
 from carla_api.agents.navigation.basic_agent import BasicAgent  # pylint: disable=import-error
+from carla_api.agents.navigation.behavior_agent import BehaviorAgent  # pylint: disable=import-error
 from carla_api.agents.navigation.constant_velocity_agent import ConstantVelocityAgent  # pylint: disable=import-error
-
-from carla_api.utils.carla_utils import find_weather_presets, get_actor_display_name, get_actor_blueprints, HUD, \
-    KeyboardControl
+from carla_api.utils.carla_utils import HUD, KeyboardControl
+from carla_api.utils.mtr_data_utils import create_scene_level_data, decode_map_features, generate_prediction_dicts
 from carla_api.utils.world import World
-from carla_api.utils.mtr_data_utils import create_scene_level_data, parse_carla_data, decode_map_features
-
-from pathlib import Path
-from mtr.datasets.waymo.waymo_types import object_type, lane_type, road_line_type, road_edge_type, signal_state, \
-    polyline_type
-from mtr.config import cfg, cfg_from_list, cfg_from_yaml_file, log_config_to_file
-from mtr.datasets import build_dataloader
+from mtr.config import cfg, cfg_from_yaml_file
 from mtr.models import model as model_utils
 from mtr.utils import common_utils
 
@@ -64,14 +53,7 @@ def game_loop(args):
     routing_graph.following(map.laneletLayer[6135])  # actually previous lane
     # also have left and right relations (in correct order)
 
-    info = parse_carla_data()
     map_infos, dynamic_map_infos = decode_map_features(map, routing_graph)
-
-    # test_set, test_loader, sampler = build_dataloader(
-    #     dataset_cfg=cfg.DATA_CONFIG,
-    #     batch_size=args.batch_size,
-    #     dist=dist_test, workers=args.workers, logger=logger, training=False
-    # )
 
     cfg_path = "../../tools/cfgs/waymo/mtr+100_percent_data.yaml"
     cfg_from_yaml_file(cfg_path, cfg)
@@ -87,7 +69,7 @@ def game_loop(args):
     model = model_utils.MotionTransformer(config=cfg.MODEL)
 
     model_path = "../model/latest_model.pth"
-    it, epoch = model.load_params_from_file(model_path, logger=logger, to_cpu=False)
+    model.load_params_from_file(model_path, logger=logger, to_cpu=False)
     model.cuda()
     model.eval()
 
@@ -154,34 +136,42 @@ def game_loop(args):
             if controller.parse_events():
                 return
 
-            track_infos = world.tick(clock)
+            info = world.tick(clock)
             world.render(display)
             pygame.display.flip()
 
-            if track_infos is not None:
-                info['track_infos'] = track_infos
+            if info is not None:
                 info['map_infos'] = map_infos
                 info['dynamic_map_infos'] = dynamic_map_infos
                 ret_infos = create_scene_level_data(info, cfg.DATA_CONFIG)
                 batch_dict = {
                     'batch_size': 1,
                     'input_dict': ret_infos,
-
+                    'batch_sample_count': [len(info['vehicle_ids'])]
                 }
                 with torch.no_grad():
                     batch_pred_dicts = model(batch_dict)
+                    final_pred_dicts = generate_prediction_dicts(batch_pred_dicts)[0]
 
-                pred_traj = batch_pred_dicts['pred_trajs'].cpu().numpy()
+                for pred_dict in final_pred_dicts:  # TODO: Loop through predictions of each object
+                    pred_trajs = pred_dict['pred_trajs']
+                    pred_scores = pred_dict['pred_scores']
+                    object_id = pred_dict['object_id']
+                    object_type = pred_dict['object_type']
 
-            if agent.done():
-                # if agent.done() or update:
-                if args.loop or True:
-                    agent.set_destination(random.choice(spawn_points).location)
-                    world.hud.notification("Target reached", seconds=4.0)
-                    print("The target has been reached, searching for another target")
-                else:
-                    print("The target has been reached, stopping the simulation")
-                    break
+                pred_ego = final_pred_dicts[0]
+                traj_index = np.argmax(pred_ego['pred_scores'])
+                destination = pred_ego['pred_trajs'][traj_index][5]
+                agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0.6))
+
+            # if agent.done():
+            #     if args.loop or True:
+            #         agent.set_destination(random.choice(spawn_points).location)
+            #         world.hud.notification("Target reached", seconds=4.0)
+            #         print("The target has been reached, searching for another target")
+            #     else:
+            #         print("The target has been reached, stopping the simulation")
+            #         break
 
             control = agent.run_step()
             control.manual_gear_shift = False

@@ -2,7 +2,8 @@
 1. Download the [trained model](https://drive.google.com/file/d/11q367vF-fR0U3zF067PQPMts1P2d-KBz/view?usp=drive_link) and put it under `carla_api/model`.
 2. Install Carla Python API.
 3. Start Carla server.
-4. Run `python3 carla_api/scripts/automatic_control.py`
+4. Run `python3 setup.py develop`
+5. Run `python3 carla_api/scripts/automatic_control.py`
 
 # TODO list
 - [ ] Add information of bike lane
@@ -12,7 +13,8 @@
 - [ ] Check `global_type`
 - [ ] Distinguish between `road_line` and `road_edge`
 - [ ] Add information of traffic light
-- [ ] Model output is incorrect. Probably caused by coordinate normalization
+- [x] Model output is incorrect. Probably caused by coordinate normalization
+- [ ] Carla crashes at junctions.
 
 # Motion Transformer (MTR): A Strong Baseline for Multimodal Motion Prediction in Autonomous Driving
 

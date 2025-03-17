@@ -11,3 +11,6 @@ data/
 *.yaml
 *.png
 *.html
+.idea/
+carla_api/model/
+mtr/version.py
