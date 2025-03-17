@@ -1,3 +1,19 @@
+# How to run MTR in Carla
+1. Download the [trained model](https://drive.google.com/file/d/11q367vF-fR0U3zF067PQPMts1P2d-KBz/view?usp=drive_link) and put it under `carla_api/model`.
+2. Install Carla Python API.
+3. Start Carla server.
+4. Run `python3 carla_api/scripts/automatic_control.py`
+
+# TODO list
+- [ ] Add information of bike lane
+- [ ] Add information of stop sign and speed bump
+- [ ] Check interpolating lanes
+- [ ] Check `feature_id` attribute in `left_boundary` and `right_boundary` of the lane
+- [ ] Check `global_type`
+- [ ] Distinguish between `road_line` and `road_edge`
+- [ ] Add information of traffic light
+- [ ] Model output is incorrect. Probably caused by coordinate normalization
+
 # Motion Transformer (MTR): A Strong Baseline for Multimodal Motion Prediction in Autonomous Driving
 
 
