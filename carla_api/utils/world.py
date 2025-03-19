@@ -15,7 +15,7 @@ from functools import partial
 class World(object):
     """ Class representing the surrounding environment """
 
-    def __init__(self, carla_world, hud, args):
+    def __init__(self, carla_world, hud, delta_t, args):
         """Constructor method"""
         self._args = args
         self.world = carla_world
@@ -40,8 +40,9 @@ class World(object):
         self.world.on_tick(hud.on_world_tick)
         self.recording_enabled = False
         self.recording_start = 0
+        self._delta_t = delta_t
         self._trajectories = defaultdict(partial(deque, maxlen=11))
-        self._mtr_cnt = 0
+        self._simulation_steps = 0
 
     def restart(self, args):
         """Restart the world"""
@@ -112,8 +113,6 @@ class World(object):
 
     def tick(self, clock):
         """Method for every tick"""
-        update = False
-
         ego_transform = self.player.get_transform()
         vehicles = self.world.get_actors().filter('vehicle.*')
 
@@ -132,7 +131,8 @@ class World(object):
                 vehicle_dist.append((dist(loc), vehicle.id, vehicle))
             dim = vehicle.bounding_box.extent * 2
             traj = np.array([loc.x, loc.y, loc.z, dim.x, dim.y, dim.z, math.radians(yaw), vel.x, vel.y, 1])
-            self._trajectories[vehicle.id].append(traj)
+            if self._simulation_steps % int(0.1 / self._delta_t) == 0:
+                self._trajectories[vehicle.id].append(traj)
 
         vehicle_dist.sort()
 
@@ -148,12 +148,12 @@ class World(object):
         for i in range(min(7, len(vehicle_dist))):  # find the 7 closest vehicles
             track_ids.append(vehicle_dist[i][1])
 
-        self._mtr_cnt += 1
+        self._simulation_steps += 1
         info = None
-        if self._mtr_cnt == 5:
+        if self._simulation_steps == int(0.5 / self._delta_t):
             info = self.parse_carla_data(track_ids)
             info['vehicle_ids'] = track_ids
-            self._mtr_cnt = 0
+            self._simulation_steps = 0
 
         self.hud.tick(self, clock, nearby_vehicles)
         return info

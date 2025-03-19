@@ -13,6 +13,7 @@ from __future__ import print_function
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
 
 import carla
@@ -44,6 +45,12 @@ def game_loop(args):
     Main loop of the simulation. It handles updating all the HUD information,
     ticking the agent and, if needed, the world.
     """
+    args.sync = True
+    delta_t = 0.02
+
+    if delta_t > 0.1:
+        sys.exit('Error: Delta_t must be no greater than 0.1s in accordance with MTR.')
+
     map = lanelet2.io.load("../../carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
     traffic_rules = lanelet2.traffic_rules.create(lanelet2.traffic_rules.Locations.Germany,
                                                   lanelet2.traffic_rules.Participants.Vehicle)
@@ -90,12 +97,10 @@ def game_loop(args):
         traffic_manager = client.get_trafficmanager()
         sim_world = client.get_world()
 
-        args.sync = True
-
         if args.sync:
             settings = sim_world.get_settings()
             settings.synchronous_mode = True
-            settings.fixed_delta_seconds = 0.1
+            settings.fixed_delta_seconds = delta_t
             sim_world.apply_settings(settings)
 
             traffic_manager.set_synchronous_mode(True)
@@ -105,7 +110,7 @@ def game_loop(args):
             pygame.HWSURFACE | pygame.DOUBLEBUF)
 
         hud = HUD(args.width, args.height)
-        world = World(client.get_world(), hud, args)
+        world = World(client.get_world(), hud, delta_t, args)
         # world = World(client.load_world(map_name), hud, args)
         controller = KeyboardControl(world)
         if args.agent == "Basic":
@@ -118,7 +123,7 @@ def game_loop(args):
                 world.player.set_location(ground_loc.location + carla.Location(z=0.01))
             agent.follow_speed_limits(True)
         elif args.agent == "Behavior":
-            agent = BehaviorAgent(world.player, behavior=args.behavior)
+            agent = BehaviorAgent(world.player, behavior=args.behavior, opt_dict={'sampling_resolution': 0.1})
 
         # Set the agent destination
         spawn_points = world.map.get_spawn_points()
@@ -161,19 +166,14 @@ def game_loop(args):
 
                 pred_ego = final_pred_dicts[0]
                 traj_index = np.argmax(pred_ego['pred_scores'])
-                destination = pred_ego['pred_trajs'][traj_index][5]
-                agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0.6))
+                destination = pred_ego['pred_trajs'][traj_index][10]
+                agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
 
-            # if agent.done():
-            #     if args.loop or True:
-            #         agent.set_destination(random.choice(spawn_points).location)
-            #         world.hud.notification("Target reached", seconds=4.0)
-            #         print("The target has been reached, searching for another target")
-            #     else:
-            #         print("The target has been reached, stopping the simulation")
-            #         break
-
-            control = agent.run_step()
+            try:
+                control = agent.run_step()
+            except:
+                destination = pred_ego['pred_trajs'][traj_index][50]
+                agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
             control.manual_gear_shift = False
             world.player.apply_control(control)
 
