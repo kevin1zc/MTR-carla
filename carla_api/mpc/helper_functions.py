@@ -1,4 +1,6 @@
 import math
+import carla
+import casadi as ca
 import numpy as np
 from carla_api.mpc.config import d_safe
 
@@ -6,7 +8,7 @@ epsilon = 0.001
 
 def calculate_terminal_deviation(predicted_destination, destination):
 
-    manh_distance = abs(predicted_destination[0] - destination[0]) + abs(predicted_destination[1] - destination[1])
+    manh_distance = ca.fabs(predicted_destination[0] - destination[0]) + ca.fabs(predicted_destination[1] - destination[1])
 
     return manh_distance
 

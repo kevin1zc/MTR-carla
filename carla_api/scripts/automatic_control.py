@@ -27,6 +27,7 @@ from lanelet2.routing import RoutingGraph
 from carla_api.agents.navigation.basic_agent import BasicAgent  # pylint: disable=import-error
 from carla_api.agents.navigation.behavior_agent import BehaviorAgent  # pylint: disable=import-error
 from carla_api.agents.navigation.constant_velocity_agent import ConstantVelocityAgent  # pylint: disable=import-error
+from carla_api.mpc.mpc_solver import MpcController
 from carla_api.utils.carla_utils import HUD, KeyboardControl
 from carla_api.utils.mtr_data_utils import create_scene_level_data, decode_map_features, generate_prediction_dicts
 from carla_api.utils.world import World
@@ -51,7 +52,9 @@ def game_loop(args):
     if delta_t > 0.1:
         sys.exit('Error: Delta_t must be no greater than 0.1s in accordance with MTR.')
 
-    map = lanelet2.io.load("../../carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
+    import sys
+    print(sys.path, os.getcwd())
+    map = lanelet2.io.load("./carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
     traffic_rules = lanelet2.traffic_rules.create(lanelet2.traffic_rules.Locations.Germany,
                                                   lanelet2.traffic_rules.Participants.Vehicle)
     routing_graph = RoutingGraph(map, traffic_rules)
@@ -62,7 +65,7 @@ def game_loop(args):
 
     map_infos, dynamic_map_infos = decode_map_features(map, routing_graph)
 
-    cfg_path = "../../tools/cfgs/waymo/mtr+100_percent_data.yaml"
+    cfg_path = "./tools/cfgs/waymo/mtr+100_percent_data.yaml"
     cfg_from_yaml_file(cfg_path, cfg)
     cfg.TAG = Path(cfg_path).stem
     cfg.EXP_GROUP_PATH = '/'.join(cfg_path.split('/')[1:-1])
@@ -75,7 +78,7 @@ def game_loop(args):
 
     model = model_utils.MotionTransformer(config=cfg.MODEL)
 
-    model_path = "../model/latest_model.pth"
+    model_path = "./carla_api/model/latest_model.pth"
     model.load_params_from_file(model_path, logger=logger, to_cpu=False)
     model.cuda()
     model.eval()
@@ -145,6 +148,8 @@ def game_loop(args):
             world.render(display)
             pygame.display.flip()
 
+            throttle, brake, steer = 0, 0, 0
+
             if info is not None:
                 info['map_infos'] = map_infos
                 info['dynamic_map_infos'] = dynamic_map_infos
@@ -167,6 +172,8 @@ def game_loop(args):
                 pred_ego = final_pred_dicts[0]
                 traj_index = np.argmax(pred_ego['pred_scores'])
                 destination = pred_ego['pred_trajs'][traj_index][10]
+                mpc = MpcController(world.world, world.player, pred_ego['pred_trajs'][traj_index])
+                throttle, brake, steer = mpc.run_mpc()
                 agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
 
             try:
@@ -174,6 +181,10 @@ def game_loop(args):
             except:
                 destination = pred_ego['pred_trajs'][traj_index][50]
                 agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
+            print(f"Applying Throttle: {throttle}, Brake: {brake}, Steer: {steer} at {clock.get_time()}")
+            control.steer = steer
+            control.throttle = throttle
+            control.brake = brake
             control.manual_gear_shift = False
             world.player.apply_control(control)
 
@@ -220,8 +231,8 @@ def main():
     argparser.add_argument(
         '--res',
         metavar='WIDTHxHEIGHT',
-        default='1280x720',
-        help='Window resolution (default: 1280x720)')
+        default='720x420',
+        help='Window resolution (default: 720x420)')
     argparser.add_argument(
         '--sync',
         action='store_true',
