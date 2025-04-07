@@ -6,7 +6,7 @@ import casadi as ca
 import carla
 
 from carla_api.mpc.helper_functions import calculate_terminal_deviation, calculate_min_distance_so, calculate_min_distance_do, \
-                                           distance_to_closest_waypoint
+                                           distance_to_closest_waypoint, distance_to_next_closest_waypoint
 from carla_api.mpc.kinematic_bicycle import bicycle_model
 
 from carla_api.mpc.config import N, dt
@@ -15,7 +15,6 @@ from carla_api.mpc.config import MAX_CONTROL_WHEEL_ANGLE, MAX_CONTROL_ACCELERATI
 from carla_api.mpc.config import FINE_STEER_COEF, FINE_ACC_COEF, FINE_STEER_DOT_COEF, \
                                FINE_ACC_DOT_COEF, TERMINAL_COST_COEF, SOC_COST_COEF, DOC_COST_COEF, SOR_COST_COEF
 
-from mpc_for_mtr.config import MAX_BRAKING_M_S_2, MAX_WHEEL_ANGLE_RAD, MAX_ACCELERATION_M_S_2
 
 
 class MpcController:
@@ -102,7 +101,7 @@ class MpcController:
             dyn_obs_collision_cost = DOC_COST_COEF * calculate_min_distance_do(self.X[:2, k], self.predicted_trajs[k])
 
             # CF5
-            stay_on_road_cost = SOR_COST_COEF * distance_to_closest_waypoint(self.X[:2, k], self.waypoints)
+            stay_on_road_cost = SOR_COST_COEF * distance_to_next_closest_waypoint(self.X[:2, k], self.waypoints)
 
             self.cost += terminal_cost + fine_steer + fine_acc + fine_steer_dot + fine_acc_dot \
                         + static_obs_collision_cost + dyn_obs_collision_cost + stay_on_road_cost
@@ -189,10 +188,10 @@ class MpcController:
             brake = 0
         elif acceleration_m_s_2 < 0:
             throttle = 0
-            brake = acceleration_m_s_2 / MAX_BRAKING_M_S_2
+            brake = acceleration_m_s_2 / MAX_CONTROL_BRAKING
         else:
-            throttle = acceleration_m_s_2 / MAX_ACCELERATION_M_S_2
+            throttle = acceleration_m_s_2 / MAX_CONTROL_ACCELERATION
             brake = 0
-        steer = wheel_angle_rad / MAX_WHEEL_ANGLE_RAD
+        steer = wheel_angle_rad / MAX_CONTROL_WHEEL_ANGLE
         return throttle, brake, steer
     
