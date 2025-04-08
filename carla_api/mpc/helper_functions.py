@@ -8,9 +8,9 @@ epsilon = 0.001
 
 def calculate_terminal_deviation(predicted_destination, destination):
 
-    manh_distance = ca.fabs(predicted_destination[0] - destination[0]) + ca.fabs(predicted_destination[1] - destination[1])
+    distance = (predicted_destination[0] - destination[0])**2 + (predicted_destination[1] - destination[1])**2
 
-    return manh_distance
+    return distance
 
 
 def calculate_min_distance_so(current_position, obstacles): 
@@ -65,3 +65,20 @@ def distance_to_closest_waypoint(current_position, cx, cy):
     x_ref1, y_ref1, x_ref2, y_ref2 = find_closest_waypoint(current_position, cx, cy)
     
     return calculate_lateral_deviation(current_position, x_ref1, y_ref1, x_ref2, y_ref2)
+
+
+
+def distance_to_next_closest_waypoint(current_position, cx, cy):
+
+    distances = np.sum(( np.array([[current_position[0]], [current_position[1]]]) -
+                             np.stack((cx, cy)) )**2, axis=0)
+       
+    three_smallest_indices = np.argsort(distances)[:3]
+    next_closest_idx = np.max(three_smallest_indices)
+
+    waypt_x = cx[next_closest_idx]
+    waypt_y = cy[next_closest_idx]
+
+    dist_to_next_waypoint = (current_position[0] -  waypt_x)**2 + (current_position[1] - waypt_y)**2
+
+    return dist_to_next_waypoint
