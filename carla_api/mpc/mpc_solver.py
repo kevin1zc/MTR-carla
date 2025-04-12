@@ -20,7 +20,7 @@ from carla_api.mpc.config import MAX_BRAKING_M_S_2, MAX_WHEEL_ANGLE_RAD, MAX_ACC
 
 
 class MpcController:
-    def __init__(self, world, ego_vehicle, predicted_trajs, horizon = N, dt = dt):
+    def __init__(self, world, ego_vehicle, predicted_trajs, waypoints, horizon = N, dt = dt):
         self.world = world
         self.carla_map = world.get_map()
         self.horizon = horizon
@@ -42,7 +42,7 @@ class MpcController:
         self.ego_vehicle = ego_vehicle
         self.red_light = [None]*N # if red_light then True, else False
         self.stop_sign = [None]*N # if stop_sign then True, else False
-        self.waypoints = None
+        self.waypoints = waypoints if len(waypoints) >= 10 else waypoints + [waypoints[-1]] * (10 - len(waypoints)) # next k closest waypoints
 
         self.epsilon = 1e-6
 
@@ -116,7 +116,7 @@ class MpcController:
                 fine_acc_dot += FINE_ACC_DOT_COEF * (self.U[1, k] - self.U[1, k - 1]) ** 2
 
             # CF3
-            if obstacles[k]:
+            if obstacles[k].size > 0:
                 static_obs_collision_cost = SOC_COST_COEF * calculate_min_distance_so(self.X[:2, k], obstacles[k])
             else:
                 static_obs_collision_cost = 0
@@ -124,9 +124,9 @@ class MpcController:
             # CF4
             dyn_obs_collision_cost = DOC_COST_COEF * calculate_min_distance_do(self.X[:2, k], self.dyn_predicted_traj[:, k, :])
 
-            # # CF5
-            # stay_on_road_cost = SOR_COST_COEF * distance_to_next_closest_waypoint(self.X[:2, k], self.waypoints)
-            stay_on_road_cost = 0
+            # CF5
+            stay_on_road_cost = SOR_COST_COEF * distance_to_next_closest_waypoint(self.X[:2, k], self.waypoints[k][0], self.waypoints[k][1])
+            # stay_on_road_cost = 0
 
             self.cost += terminal_cost + fine_steer + fine_acc + fine_steer_dot + fine_acc_dot \
                         + static_obs_collision_cost + dyn_obs_collision_cost + stay_on_road_cost
@@ -201,11 +201,11 @@ class MpcController:
         return x, y, yaw, v 
     
     def get_destination(self):
-        location = self.carla_map.get_waypoint(
-            carla.Location(self.ego_predicted_traj[-1][0].item(), self.ego_predicted_traj[-1][1].item(), 0), 
-            project_to_road=True
-        ).transform.location
-        return (location.x, location.y)
+        # location = self.carla_map.get_waypoint(
+        #     carla.Location(self.ego_predicted_traj[-1][0].item(), self.ego_predicted_traj[-1][1].item(), 0), 
+        #     project_to_road=True
+        # ).transform.location
+        return (self.waypoints[-1][0], self.waypoints[-1][1]) # (x, y)
 
     def get_static_obstacles(self):
         bboxs = self.get_static_obstacle_bbox()

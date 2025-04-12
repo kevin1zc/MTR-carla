@@ -22,6 +22,7 @@ import numpy as np
 import numpy.random as random
 import pygame
 import torch
+import matplotlib.pyplot as plt
 from lanelet2.routing import RoutingGraph
 
 from carla_api.agents.navigation.basic_agent import BasicAgent  # pylint: disable=import-error
@@ -130,8 +131,22 @@ def game_loop(args):
 
         # Set the agent destination
         spawn_points = world.map.get_spawn_points()
-        destination = random.choice(spawn_points).location
+        f_destination = destination = random.choice(spawn_points).location
         agent.set_destination(destination)
+
+        # trace route from start to destination
+        f_start_location = start_location = world.player.get_location()
+        start_waypoint = world.map.get_waypoint(start_location)
+        end_waypoint = world.map.get_waypoint(destination)
+        trace =  agent.trace_route(start_waypoint, end_waypoint)
+        route = []
+        for wp in trace:
+            route.append([wp[0].transform.location.x, wp[0].transform.location.y])
+        route = np.array(route)
+        # plt.plot(start_location.x, start_location.y, 'go')
+        # plt.plot(destination.x, destination.y, 'ro')
+        # plt.plot(route[:, 0], route[:, 1], 'b-')
+        # plt.show()
 
         clock = pygame.time.Clock()
 
@@ -172,7 +187,20 @@ def game_loop(args):
                 pred_ego = final_pred_dicts[0]
                 traj_index = np.argmax(pred_ego['pred_scores'])
                 destination = pred_ego['pred_trajs'][traj_index][10]
-                mpc = MpcController(world.world, world.player, pred_ego['pred_trajs'][traj_index])
+                # plt.plot(f_start_location.x, f_start_location.y, 'go')
+                # plt.plot(f_destination.x, f_destination.y, 'ro')
+                # plt.plot(route[:, 0], route[:, 1], 'b-')
+                # plt.plot(pred_ego['pred_trajs'][traj_index][:11, 0], pred_ego['pred_trajs'][traj_index][:11, 1], 'r*-')
+                # plt.show()
+
+                # Get waypoints
+                current_location = np.array([world.player.get_location().x, world.player.get_location().y])
+                closest_index = np.argmin(np.sum((route - current_location)**2, axis=1))
+                if closest_index == len(route) - 1:
+                    closest_k_waypoint = list(route[closest_index])
+                else:
+                    closest_k_waypoint = list(route[closest_index + 1: closest_index + 1 + 10])
+                mpc = MpcController(world.world, world.player, pred_ego['pred_trajs'][traj_index], closest_k_waypoint)
                 throttle, brake, steer = mpc.run_mpc()
                 agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
 
