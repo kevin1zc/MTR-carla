@@ -51,11 +51,13 @@ def game_loop(args):
     delta_t = 0.02
 
     if delta_t > 0.1:
-        sys.exit('Error: Delta_t must be no greater than 0.1s in accordance with MTR.')
+        sys.exit(
+            'Error: Delta_t must be no greater than 0.1s in accordance with MTR.')
 
     import sys
     print(sys.path, os.getcwd())
-    map = lanelet2.io.load("./carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
+    map = lanelet2.io.load(
+        "./carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
     traffic_rules = lanelet2.traffic_rules.create(lanelet2.traffic_rules.Locations.Germany,
                                                   lanelet2.traffic_rules.Participants.Vehicle)
     routing_graph = RoutingGraph(map, traffic_rules)
@@ -74,7 +76,8 @@ def game_loop(args):
 
     # log to file
     logger.info('**********************Start logging**********************')
-    gpu_list = os.environ['CUDA_VISIBLE_DEVICES'] if 'CUDA_VISIBLE_DEVICES' in os.environ.keys() else 'ALL'
+    gpu_list = os.environ['CUDA_VISIBLE_DEVICES'] if 'CUDA_VISIBLE_DEVICES' in os.environ.keys(
+    ) else 'ALL'
     logger.info('CUDA_VISIBLE_DEVICES=%s' % gpu_list)
 
     model = model_utils.MotionTransformer(config=cfg.MODEL)
@@ -122,12 +125,15 @@ def game_loop(args):
             agent.follow_speed_limits(True)
         elif args.agent == "Constant":
             agent = ConstantVelocityAgent(world.player, 30)
-            ground_loc = world.world.ground_projection(world.player.get_location(), 5)
+            ground_loc = world.world.ground_projection(
+                world.player.get_location(), 5)
             if ground_loc:
-                world.player.set_location(ground_loc.location + carla.Location(z=0.01))
+                world.player.set_location(
+                    ground_loc.location + carla.Location(z=0.01))
             agent.follow_speed_limits(True)
         elif args.agent == "Behavior":
-            agent = BehaviorAgent(world.player, behavior=args.behavior, opt_dict={'sampling_resolution': 0.1})
+            agent = BehaviorAgent(world.player, behavior=args.behavior, opt_dict={
+                                  'sampling_resolution': 0.1})
 
         # Set the agent destination
         spawn_points = world.map.get_spawn_points()
@@ -138,10 +144,11 @@ def game_loop(args):
         f_start_location = start_location = world.player.get_location()
         start_waypoint = world.map.get_waypoint(start_location)
         end_waypoint = world.map.get_waypoint(destination)
-        trace =  agent.trace_route(start_waypoint, end_waypoint)
+        trace = agent.trace_route(start_waypoint, end_waypoint)
         route = []
         for wp in trace:
-            route.append([wp[0].transform.location.x, wp[0].transform.location.y])
+            route.append([wp[0].transform.location.x,
+                         wp[0].transform.location.y])
         route = np.array(route)
         # plt.plot(start_location.x, start_location.y, 'go')
         # plt.plot(destination.x, destination.y, 'ro')
@@ -149,6 +156,8 @@ def game_loop(args):
         # plt.show()
 
         clock = pygame.time.Clock()
+
+        throttle, brake, steer = 0, 0, 0
 
         while True:
             clock.tick()
@@ -163,8 +172,6 @@ def game_loop(args):
             world.render(display)
             pygame.display.flip()
 
-            throttle, brake, steer = 0, 0, 0
-
             if info is not None:
                 info['map_infos'] = map_infos
                 info['dynamic_map_infos'] = dynamic_map_infos
@@ -176,7 +183,8 @@ def game_loop(args):
                 }
                 with torch.no_grad():
                     batch_pred_dicts = model(batch_dict)
-                    final_pred_dicts = generate_prediction_dicts(batch_pred_dicts)[0]
+                    final_pred_dicts = generate_prediction_dicts(batch_pred_dicts)[
+                        0]
 
                 for pred_dict in final_pred_dicts:  # TODO: Loop through predictions of each object
                     pred_trajs = pred_dict['pred_trajs']
@@ -194,22 +202,29 @@ def game_loop(args):
                 # plt.show()
 
                 # Get waypoints
-                current_location = np.array([world.player.get_location().x, world.player.get_location().y])
-                closest_index = np.argmin(np.sum((route - current_location)**2, axis=1))
+                current_location = np.array(
+                    [world.player.get_location().x, world.player.get_location().y])
+                closest_index = np.argmin(
+                    np.sum((route - current_location)**2, axis=1))
                 if closest_index == len(route) - 1:
                     closest_k_waypoint = list(route[closest_index])
                 else:
-                    closest_k_waypoint = list(route[closest_index + 1: closest_index + 1 + 10])
-                mpc = MpcController(world.world, world.player, pred_ego['pred_trajs'][traj_index], closest_k_waypoint)
+                    closest_k_waypoint = list(
+                        route[closest_index + 1: closest_index + 1 + 10])
+                mpc = MpcController(
+                    world.world, world.player, pred_ego['pred_trajs'][traj_index], closest_k_waypoint, f_destination)
                 throttle, brake, steer = mpc.run_mpc()
-                agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
+                agent.set_destination(carla.Location(
+                    destination[0].item(), destination[1].item(), 0))
 
             try:
                 control = agent.run_step()
             except:
                 destination = pred_ego['pred_trajs'][traj_index][50]
-                agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
-            print(f"Applying Throttle: {throttle}, Brake: {brake}, Steer: {steer} at {clock.get_time()}")
+                agent.set_destination(carla.Location(
+                    destination[0].item(), destination[1].item(), 0))
+            print(
+                f"Applying Throttle: {throttle}, Brake: {brake}, Steer: {steer} at {clock.get_time()}")
             control.steer = steer
             control.throttle = throttle
             control.brake = brake
