@@ -1,5 +1,4 @@
 **__pycache__**
-*.pkl
 *.so
 *.npz
 *.stat
@@ -12,5 +11,5 @@ data/
 *.png
 *.html
 .idea/
-carla_api/model/
+*.pth
 mtr/version.py
