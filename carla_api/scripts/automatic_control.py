@@ -22,11 +22,13 @@ import numpy as np
 import numpy.random as random
 import pygame
 import torch
+import matplotlib.pyplot as plt
 from lanelet2.routing import RoutingGraph
 
 from carla_api.agents.navigation.basic_agent import BasicAgent  # pylint: disable=import-error
 from carla_api.agents.navigation.behavior_agent import BehaviorAgent  # pylint: disable=import-error
 from carla_api.agents.navigation.constant_velocity_agent import ConstantVelocityAgent  # pylint: disable=import-error
+from carla_api.mpc.mpc_solver import MpcController
 from carla_api.utils.carla_utils import HUD, KeyboardControl
 from carla_api.utils.mtr_data_utils import create_scene_level_data, decode_map_features, generate_prediction_dicts
 from carla_api.utils.world import World
@@ -49,9 +51,13 @@ def game_loop(args):
     delta_t = 0.02
 
     if delta_t > 0.1:
-        sys.exit('Error: Delta_t must be no greater than 0.1s in accordance with MTR.')
+        sys.exit(
+            'Error: Delta_t must be no greater than 0.1s in accordance with MTR.')
 
-    map = lanelet2.io.load("../../carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
+    import sys
+    print(sys.path, os.getcwd())
+    map = lanelet2.io.load(
+        "./carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
     traffic_rules = lanelet2.traffic_rules.create(lanelet2.traffic_rules.Locations.Germany,
                                                   lanelet2.traffic_rules.Participants.Vehicle)
     routing_graph = RoutingGraph(map, traffic_rules)
@@ -62,7 +68,7 @@ def game_loop(args):
 
     map_infos, dynamic_map_infos = decode_map_features(map, routing_graph)
 
-    cfg_path = "../../tools/cfgs/waymo/mtr+100_percent_data.yaml"
+    cfg_path = "./tools/cfgs/waymo/mtr+100_percent_data.yaml"
     cfg_from_yaml_file(cfg_path, cfg)
     cfg.TAG = Path(cfg_path).stem
     cfg.EXP_GROUP_PATH = '/'.join(cfg_path.split('/')[1:-1])
@@ -70,12 +76,13 @@ def game_loop(args):
 
     # log to file
     logger.info('**********************Start logging**********************')
-    gpu_list = os.environ['CUDA_VISIBLE_DEVICES'] if 'CUDA_VISIBLE_DEVICES' in os.environ.keys() else 'ALL'
+    gpu_list = os.environ['CUDA_VISIBLE_DEVICES'] if 'CUDA_VISIBLE_DEVICES' in os.environ.keys(
+    ) else 'ALL'
     logger.info('CUDA_VISIBLE_DEVICES=%s' % gpu_list)
 
     model = model_utils.MotionTransformer(config=cfg.MODEL)
 
-    model_path = "../model/latest_model.pth"
+    model_path = "./carla_api/model/latest_model.pth"
     model.load_params_from_file(model_path, logger=logger, to_cpu=False)
     model.cuda()
     model.eval()
@@ -118,19 +125,39 @@ def game_loop(args):
             agent.follow_speed_limits(True)
         elif args.agent == "Constant":
             agent = ConstantVelocityAgent(world.player, 30)
-            ground_loc = world.world.ground_projection(world.player.get_location(), 5)
+            ground_loc = world.world.ground_projection(
+                world.player.get_location(), 5)
             if ground_loc:
-                world.player.set_location(ground_loc.location + carla.Location(z=0.01))
+                world.player.set_location(
+                    ground_loc.location + carla.Location(z=0.01))
             agent.follow_speed_limits(True)
         elif args.agent == "Behavior":
-            agent = BehaviorAgent(world.player, behavior=args.behavior, opt_dict={'sampling_resolution': 0.1})
+            agent = BehaviorAgent(world.player, behavior=args.behavior, opt_dict={
+                                  'sampling_resolution': 0.1})
 
         # Set the agent destination
         spawn_points = world.map.get_spawn_points()
-        destination = random.choice(spawn_points).location
+        f_destination = destination = random.choice(spawn_points).location
         agent.set_destination(destination)
 
+        # trace route from start to destination
+        f_start_location = start_location = world.player.get_location()
+        start_waypoint = world.map.get_waypoint(start_location)
+        end_waypoint = world.map.get_waypoint(destination)
+        trace = agent.trace_route(start_waypoint, end_waypoint)
+        route = []
+        for wp in trace:
+            route.append([wp[0].transform.location.x,
+                         wp[0].transform.location.y])
+        route = np.array(route)
+        # plt.plot(start_location.x, start_location.y, 'go')
+        # plt.plot(destination.x, destination.y, 'ro')
+        # plt.plot(route[:, 0], route[:, 1], 'b-')
+        # plt.show()
+
         clock = pygame.time.Clock()
+
+        throttle, brake, steer = 0, 0, 0
 
         while True:
             clock.tick()
@@ -156,7 +183,8 @@ def game_loop(args):
                 }
                 with torch.no_grad():
                     batch_pred_dicts = model(batch_dict)
-                    final_pred_dicts = generate_prediction_dicts(batch_pred_dicts)[0]
+                    final_pred_dicts = generate_prediction_dicts(batch_pred_dicts)[
+                        0]
 
                 for pred_dict in final_pred_dicts:  # TODO: Loop through predictions of each object
                     pred_trajs = pred_dict['pred_trajs']
@@ -167,13 +195,39 @@ def game_loop(args):
                 pred_ego = final_pred_dicts[0]
                 traj_index = np.argmax(pred_ego['pred_scores'])
                 destination = pred_ego['pred_trajs'][traj_index][10]
-                agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
+                # plt.plot(f_start_location.x, f_start_location.y, 'go')
+                # plt.plot(f_destination.x, f_destination.y, 'ro')
+                # plt.plot(route[:, 0], route[:, 1], 'b-')
+                # plt.plot(pred_ego['pred_trajs'][traj_index][:11, 0], pred_ego['pred_trajs'][traj_index][:11, 1], 'r*-')
+                # plt.show()
+
+                # Get waypoints
+                current_location = np.array(
+                    [world.player.get_location().x, world.player.get_location().y])
+                closest_index = np.argmin(
+                    np.sum((route - current_location)**2, axis=1))
+                if closest_index == len(route) - 1:
+                    closest_k_waypoint = list(route[closest_index])
+                else:
+                    closest_k_waypoint = list(
+                        route[closest_index + 1: closest_index + 1 + 10])
+                mpc = MpcController(
+                    world.world, world.player, pred_ego['pred_trajs'][traj_index], closest_k_waypoint, f_destination)
+                throttle, brake, steer = mpc.run_mpc()
+                agent.set_destination(carla.Location(
+                    destination[0].item(), destination[1].item(), 0))
 
             try:
                 control = agent.run_step()
             except:
                 destination = pred_ego['pred_trajs'][traj_index][50]
-                agent.set_destination(carla.Location(destination[0].item(), destination[1].item(), 0))
+                agent.set_destination(carla.Location(
+                    destination[0].item(), destination[1].item(), 0))
+            print(
+                f"Applying Throttle: {throttle}, Brake: {brake}, Steer: {steer} at {clock.get_time()}")
+            control.steer = steer
+            control.throttle = throttle
+            control.brake = brake
             control.manual_gear_shift = False
             world.player.apply_control(control)
 
@@ -220,8 +274,8 @@ def main():
     argparser.add_argument(
         '--res',
         metavar='WIDTHxHEIGHT',
-        default='1280x720',
-        help='Window resolution (default: 1280x720)')
+        default='720x420',
+        help='Window resolution (default: 720x420)')
     argparser.add_argument(
         '--sync',
         action='store_true',

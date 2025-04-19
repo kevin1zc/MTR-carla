@@ -1,4 +1,6 @@
 import math
+import carla
+import casadi as ca
 import numpy as np
 from carla_api.mpc.config import d_safe
 
@@ -68,15 +70,18 @@ def distance_to_closest_waypoint(current_position, cx, cy):
 
 def distance_to_next_closest_waypoint(current_position, cx, cy):
 
-    distances = np.sum(( np.array([[current_position[0]], [current_position[1]]]) -
-                             np.stack((cx, cy)) )**2, axis=0)
+    # distances = np.sum(( np.array([[current_position[0]], [current_position[1]]]) -
+    #                          np.stack((cx, cy)) )**2, axis=0)
        
-    three_smallest_indices = np.argsort(distances)[:3]
-    next_closest_idx = np.max(three_smallest_indices)
+    # three_smallest_indices = np.argsort(distances)[:3]
+    # next_closest_idx = np.max(three_smallest_indices)
 
-    waypt_x = cx[next_closest_idx]
-    waypt_y = cy[next_closest_idx]
+    # waypt_x = cx[next_closest_idx]
+    # waypt_y = cy[next_closest_idx]
 
-    dist_to_next_waypoint = (current_position[0] -  waypt_x)**2 + (current_position[1] - waypt_y)**2
+    # dist_to_next_waypoint = (current_position[0] -  waypt_x)**2 + (current_position[1] - waypt_y)**2
 
-    return dist_to_next_waypoint
+    # return dist_to_next_waypoint
+
+    return ((current_position[0] - cx)**2 + (current_position[1] - cy)**2) ** 0.5
+
