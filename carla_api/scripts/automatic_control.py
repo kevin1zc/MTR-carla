@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 
+import time
 import carla
 import lanelet2
 import numpy as np
@@ -29,6 +30,7 @@ from carla_api.agents.navigation.basic_agent import BasicAgent  # pylint: disabl
 from carla_api.agents.navigation.behavior_agent import BehaviorAgent  # pylint: disable=import-error
 from carla_api.agents.navigation.constant_velocity_agent import ConstantVelocityAgent  # pylint: disable=import-error
 from carla_api.mpc.mpc_solver import MpcController
+from carla_api.mpc.config import N, dt
 from carla_api.utils.carla_utils import HUD, KeyboardControl
 from carla_api.utils.mtr_data_utils import create_scene_level_data, decode_map_features, generate_prediction_dicts
 from carla_api.utils.world import World
@@ -139,11 +141,19 @@ def game_loop(args):
         spawn_points = world.map.get_spawn_points()
         f_destination = destination = random.choice(spawn_points).location
         agent.set_destination(destination)
+        
+        #MERVE - delete later
+        f_start_location_ = world.player.get_location()
+        wp0 = world.map.get_waypoint(f_start_location_)
+        wp30  = wp0.next(30.0)[0]           
+        goal  = wp30.transform.location
+  
 
         # trace route from start to destination
         f_start_location = start_location = world.player.get_location()
         start_waypoint = world.map.get_waypoint(start_location)
-        end_waypoint = world.map.get_waypoint(destination)
+        #end_waypoint = world.map.get_waypoint(destination)
+        end_waypoint = wp30
         trace = agent.trace_route(start_waypoint, end_waypoint)
         route = []
         for wp in trace:
@@ -158,8 +168,12 @@ def game_loop(args):
         clock = pygame.time.Clock()
 
         throttle, brake, steer = 0, 0, 0
+        
+        mpc = MpcController(world.world, world.player, goal, horizon=N, dt=dt)
+        
+        run_flag = True
 
-        while True:
+        while run_flag:
             clock.tick()
             if args.sync:
                 world.world.tick()
@@ -211,10 +225,57 @@ def game_loop(args):
                 else:
                     closest_k_waypoint = list(
                         route[closest_index + 1: closest_index + 1 + 10])
-                mpc = MpcController(
-                    world.world, world.player, pred_ego['pred_trajs'][traj_index], closest_k_waypoint, f_destination)
-                throttle, brake, steer = mpc.run_mpc()
-                agent.set_destination(carla.Location(
+                        
+                """mpc = MpcController(
+                    world.world, world.player, pred_ego['pred_trajs'][traj_index], closest_k_waypoint, goal)  #f_destination
+                throttle, brake, steer = mpc.run_mpc()"""
+                
+                start_time = time.time()
+                
+                x0, y0, yaw0, v0 = mpc.get_ego_vehicle_state()
+               
+                waypoints = closest_k_waypoint if len(closest_k_waypoint) >= 10 else closest_k_waypoint + \
+                            [closest_k_waypoint[-1]] * (10 - len(closest_k_waypoint)) 
+                
+                mpc.reset_solver(x0, y0, yaw0, v0, mpc.get_static_obstacles(np.array(pred_ego['pred_trajs'][traj_index][: 10])), \
+                		  waypoints)
+                
+                
+                mpc.update_cost_function(mpc.get_destination(), np.array(pred_ego['pred_trajs'][traj_index][10:]).reshape(-1, 10, 2))
+                mpc.solve()
+                
+                wheel_angle, acceleration = mpc.get_controls_value()
+                print(f"Wheel angle: {wheel_angle}, Acceleration: {acceleration}")
+                throttle, brake, steer = mpc.process_control_inputs(wheel_angle, acceleration)
+                
+                end_time = time.time()
+                mpc_calculation_time = end_time - start_time
+                print(f"Calculation time of MPC controller: {mpc_calculation_time:.6f} seconds")
+                
+                time.sleep(max(0.1 - mpc_calculation_time, 0))
+                
+                """control.steer = steer
+                control.throttle = throttle
+                control.brake = brake
+                control.manual_gear_shift = False
+                world.player.apply_control(control)"""
+                
+                world.player.apply_control(carla.VehicleControl(throttle=throttle, steer=steer, brake=brake))
+                mpc.opti.debug.show_infeasibilities()
+                
+                x0, y0, yaw0, v0 = mpc.get_ego_vehicle_state()
+                dest = mpc.get_destination()
+                
+                final_distance = (x0 - dest[0])**2 + (y0 - dest[1])**2
+                
+                if final_distance < 1.5:
+                
+                    run_flag = False
+                    print("Finished Successfully!")
+		
+		#mpc.opti.debug.show_infeasibilities()
+
+            """    agent.set_destination(carla.Location(
                     destination[0].item(), destination[1].item(), 0))
 
             try:
@@ -224,12 +285,8 @@ def game_loop(args):
                 agent.set_destination(carla.Location(
                     destination[0].item(), destination[1].item(), 0))
             print(
-                f"Applying Throttle: {throttle}, Brake: {brake}, Steer: {steer} at {clock.get_time()}")
-            control.steer = steer
-            control.throttle = throttle
-            control.brake = brake
-            control.manual_gear_shift = False
-            world.player.apply_control(control)
+                f"Applying Throttle: {throttle}, Brake: {brake}, Steer: {steer} at {clock.get_time()}") """
+                
 
     finally:
 
