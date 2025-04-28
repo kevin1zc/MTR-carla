@@ -10,7 +10,7 @@ def calculate_terminal_deviation(predicted_destination, destination):
 
     distance = (predicted_destination[0] - destination[0])**2 + (predicted_destination[1] - destination[1])**2
 
-    return distance
+    return distance #**0.5
 
 
 def calculate_min_distance_so(current_position, obstacles): 
