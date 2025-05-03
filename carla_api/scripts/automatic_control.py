@@ -135,7 +135,7 @@ def game_loop(args):
             agent.follow_speed_limits(True)
         elif args.agent == "Behavior":
             agent = BehaviorAgent(world.player, behavior=args.behavior, opt_dict={
-                                  'sampling_resolution': 0.1})
+                                  'sampling_resolution': 0.3})
 
         # Set the agent destination
         spawn_points = world.map.get_spawn_points()
@@ -145,7 +145,7 @@ def game_loop(args):
         #MERVE - delete later
         f_start_location_ = world.player.get_location()
         wp0 = world.map.get_waypoint(f_start_location_)
-        wp30  = wp0.next(30.0)[0]           
+        wp30  = wp0.next(70.0)[0]           
         goal  = wp30.transform.location
   
 
@@ -169,9 +169,11 @@ def game_loop(args):
 
         throttle, brake, steer = 0, 0, 0
         
-        mpc = MpcController(world.world, world.player, goal, horizon=N, dt=dt)
+        mpc = MpcController(world.world, world.player, horizon=N, dt=dt)
         
         run_flag = True
+        
+        time_step = -1
 
         while run_flag:
             clock.tick()
@@ -206,14 +208,26 @@ def game_loop(args):
                     object_id = pred_dict['object_id']
                     object_type = pred_dict['object_type']
 
+                """print("final_pred_dicts :", final_pred_dicts)
+                print("final_pred_dicts shape :", len(final_pred_dicts))
+                print("pred_ego :", final_pred_dicts[0])
+                print("pred_ego shape :", len(final_pred_dicts[0]))"""
+                
+                
                 pred_ego = final_pred_dicts[0]
                 traj_index = np.argmax(pred_ego['pred_scores'])
-                destination = pred_ego['pred_trajs'][traj_index][10]
+                #destination = pred_ego['pred_trajs'][traj_index][10]
                 # plt.plot(f_start_location.x, f_start_location.y, 'go')
                 # plt.plot(f_destination.x, f_destination.y, 'ro')
                 # plt.plot(route[:, 0], route[:, 1], 'b-')
                 # plt.plot(pred_ego['pred_trajs'][traj_index][:11, 0], pred_ego['pred_trajs'][traj_index][:11, 1], 'r*-')
                 # plt.show()
+                
+                dyn_vehic_list = []
+                for i in range(1,len(final_pred_dicts)):
+                    temp_vehic_index = np.argmax(final_pred_dicts[i]['pred_scores'])
+                    temp_traj = final_pred_dicts[i]['pred_trajs'][temp_vehic_index][: 10]
+                    dyn_vehic_list.append(temp_traj)
 
                 # Get waypoints
                 current_location = np.array(
@@ -226,22 +240,39 @@ def game_loop(args):
                     closest_k_waypoint = list(
                         route[closest_index + 1: closest_index + 1 + 10])
                         
-                """mpc = MpcController(
-                    world.world, world.player, pred_ego['pred_trajs'][traj_index], closest_k_waypoint, goal)  #f_destination
-                throttle, brake, steer = mpc.run_mpc()"""
+                
+                time_step += 1
+                
+                if time_step < 2:
+                    world.player.apply_control(carla.VehicleControl())
+                    continue
+                	
                 
                 start_time = time.time()
                 
-                x0, y0, yaw0, v0 = mpc.get_ego_vehicle_state()
-               
-                waypoints = closest_k_waypoint if len(closest_k_waypoint) >= 10 else closest_k_waypoint + \
+                transform = world.player.get_transform()
+                x0 = transform.location.x
+                y0 = transform.location.y
+                yaw0 = np.deg2rad(transform.rotation.yaw)
+                v0 = np.sqrt(world.player.get_velocity().x**2 +
+                    world.player.get_velocity().y**2)
+     
+                
+                temp_list = []
+                
+                if isinstance(closest_k_waypoint[-1], np.float64):
+                    temp_list.append(closest_k_waypoint)
+                    waypoints = temp_list * 10
+                else:
+                    waypoints = closest_k_waypoint if len(closest_k_waypoint) >= 10 else closest_k_waypoint + \
                             [closest_k_waypoint[-1]] * (10 - len(closest_k_waypoint)) 
                 
+          
                 mpc.reset_solver(x0, y0, yaw0, v0, mpc.get_static_obstacles(np.array(pred_ego['pred_trajs'][traj_index][: 10])), \
                 		  waypoints)
                 
                 
-                mpc.update_cost_function(mpc.get_destination(), np.array(pred_ego['pred_trajs'][traj_index][10:]).reshape(-1, 10, 2))
+                mpc.update_cost_function((goal.x, goal.y), dyn_vehic_list)
                 mpc.solve()
                 
                 wheel_angle, acceleration = mpc.get_controls_value()
@@ -263,8 +294,14 @@ def game_loop(args):
                 world.player.apply_control(carla.VehicleControl(throttle=throttle, steer=steer, brake=brake))
                 mpc.opti.debug.show_infeasibilities()
                 
-                x0, y0, yaw0, v0 = mpc.get_ego_vehicle_state()
-                dest = mpc.get_destination()
+                transform = world.player.get_transform()
+                x0 = transform.location.x
+                y0 = transform.location.y
+                yaw0 = np.deg2rad(transform.rotation.yaw)
+                v0 = np.sqrt(world.player.get_velocity().x**2 +
+                    world.player.get_velocity().y**2)
+                    
+                dest = (goal.x, goal.y)
                 
                 final_distance = (x0 - dest[0])**2 + (y0 - dest[1])**2
                 
