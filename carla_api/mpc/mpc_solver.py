@@ -19,7 +19,7 @@ from carla_api.mpc.config import FINE_STEER_COEF, FINE_ACC_COEF, FINE_STEER_DOT_
 
 
 class MpcController:
-    def __init__(self, world, ego_vehicle, destination, horizon=N, dt=dt): #predicted_trajs, waypoints,
+    def __init__(self, world, ego_vehicle, horizon=N, dt=dt): #predicted_trajs, waypoints,
         self.world = world
         self.carla_map = world.get_map()
         self.horizon = horizon
@@ -44,10 +44,10 @@ class MpcController:
         # 7 closest agents predicted traj
         #self.dyn_predicted_traj = np.array(predicted_trajs[10:]).reshape(-1, 10, 2)  # (7, 10, 2)
         self.ego_vehicle = ego_vehicle
-        self.red_light = [None]*N  # if red_light then True, else False
-        self.stop_sign = [None]*N  # if stop_sign then True, else False
+        #self.red_light = [None]*N  # if red_light then True, else False
+        #self.stop_sign = [None]*N  # if stop_sign then True, else False
         #self.waypoints = waypoints if len(waypoints) >= 10 else waypoints + [waypoints[-1]] * (10 - len(waypoints))  # next k closest waypoints
-        self.destination = destination
+        #self.destination = destination
 
         self.epsilon = 1e-6
 
@@ -72,12 +72,13 @@ class MpcController:
 				  "constr_viol_tol": 1e-1,
 				  "compl_inf_tol": 1e-1, 
 				  "acceptable_tol": 1e-2, 
-				  "acceptable_constr_viol_tol": 0.01, 
+				  "acceptable_constr_viol_tol": 0.1, 
 				  "acceptable_dual_inf_tol": 1e10,
 				  "acceptable_compl_inf_tol": 0.01,
 				  "acceptable_obj_change_tol": 1e20,
 				  "diverging_iterates_tol": 1e20,
-                                 "nlp_scaling_method": "gradient-based" } # "none" "equilibration-based" "gradient-based"
+                                 "nlp_scaling_method": "gradient-based",
+                                 "obj_scaling_factor": 1e-1,} # "none" "equilibration-based" "gradient-based"
                   
         p_opts = {"expand": True, "print_time": False}
       
@@ -106,10 +107,11 @@ class MpcController:
             # C NEW : STATIC OBS AVOIDANCE
             
             obstacles_k = obstacles[k]
-            
-            for i in range(obstacles_k.shape[0]):
-                self.opti.subject_to((self.X[0, k] -  obstacles_k[i,0])**2 + (self.X[1, k] - obstacles_k[i,1])**2 >= d_safe)
-                
+  
+            if k>0 and obstacles_k.size:
+                for i in range(obstacles_k.shape[0]):
+                    self.opti.subject_to((self.X[0, k] -  obstacles_k[i,0])**2 + (self.X[1, k] - obstacles_k[i,1])**2 >= d_safe**2)
+      
                 
             # C NEW : DYNAMIC OBS AVOIDANCE
                                      
@@ -120,8 +122,10 @@ class MpcController:
                 
                 
             # C NEW : STAY ON THE ROAD
+   
                                 
-            self.opti.subject_to((self.X[0, k] - waypoints[k][0])**2 + (self.X[1, k] - waypoints[k][1])**2 <= d_tolerance)
+            #if k>0:
+            self.opti.subject_to((self.X[0, k] - waypoints[k][0])**2 + (self.X[1, k] - waypoints[k][1])**2 <= d_tolerance**2)
             
 
     def set_init_vehicle_state(self, x, y, yaw, v):
@@ -156,8 +160,8 @@ class MpcController:
 
             # CF4
             dyn_obs_collision_cost = DOC_COST_COEF * \
-                                     calculate_min_distance_do(
-                                     self.X[:2, k], dyn_predicted_traj[:, k, :])
+                                   calculate_min_distance_do(
+                                   self.X[:2, k], dyn_predicted_traj, k)
 
             """# CF5
             stay_on_road_cost = SOR_COST_COEF * distance_to_next_closest_waypoint(
@@ -195,9 +199,7 @@ class MpcController:
         if self.is_success:
             wheel_angle_ = self.sol.value(self.U[0, 0])
             acceleration_ = self.sol.value(self.U[1, 0])
-            print("X-values: ", self.sol.value(self.X))
-            print("X-values Shape: ", self.sol.value(self.X).shape)
-            print("U-values: ", self.sol.value(self.U))
+      
         else:
             if self.buffer_index < self.horizon:
                 acceleration_ = self.control_buffer["acceleration"][self.buffer_index]
@@ -243,7 +245,7 @@ class MpcController:
 
         return throttle, brake, steer """
 
-    def get_ego_vehicle_state(self):
+    """def get_ego_vehicle_state(self):
         transform = self.ego_vehicle.get_transform()
         x = transform.location.x
         y = transform.location.y
@@ -251,10 +253,10 @@ class MpcController:
         v = np.sqrt(self.ego_vehicle.get_velocity().x**2 +
                     self.ego_vehicle.get_velocity().y**2)
 
-        return x, y, yaw, v
+        return x, y, yaw, v """
 
-    def get_destination(self):
-        return (self.destination.x, self.destination.y)
+    """def get_destination(self):
+        return (self.destination.x, self.destination.y)"""
 
     def get_static_obstacles(self, ego_predicted_traj):
         bboxs = self.get_static_obstacle_bbox(ego_predicted_traj)

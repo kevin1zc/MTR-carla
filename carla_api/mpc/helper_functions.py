@@ -28,14 +28,14 @@ def calculate_min_distance_so(current_position, obstacles):
 
 
 
-def calculate_min_distance_do(current_position, predicted_trajs):
+def calculate_min_distance_do(current_position, predicted_trajs, k):
     # current_position = (ego_vehicle_x, ego_vehicle_y)
-    # predicted_trajs = np.array(number_of_agents, 3) where number of agents is 7 and 3 is for x/y/z coordinates
+    # predicted_trajs = list of np.array(10, 2) where 10 is horizon and 2 is for x/y coordinates
 
     dist_list = []
 
-    for i in range(predicted_trajs.shape[0]):
-        temp_dist = (current_position[0] -  predicted_trajs[i,0])**2 + (current_position[1] - predicted_trajs[i,1])**2 + epsilon
+    for i in range(len(predicted_trajs)):
+        temp_dist = (current_position[0] -  predicted_trajs[i][k,0])**2 + (current_position[1] - predicted_trajs[i][k,1])**2 + epsilon
         temp_dist = (1/temp_dist)
         dist_list.append(temp_dist)
 
