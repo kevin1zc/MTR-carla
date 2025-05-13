@@ -1,8 +1,10 @@
 import numpy as np
 import torch
 
-from mtr.datasets.waymo.waymo_types import lane_type, road_line_type
+from mtr.datasets.waymo.waymo_types import polyline_type
 from mtr.utils import common_utils
+
+from collections import defaultdict
 
 
 def get_polyline_dir(polyline):
@@ -11,6 +13,23 @@ def get_polyline_dir(polyline):
     diff = polyline - polyline_pre
     polyline_dir = diff / np.clip(np.linalg.norm(diff, axis=-1)[:, np.newaxis], a_min=1e-6, a_max=1000000000)
     return polyline_dir
+
+
+def decode_stop_sign(lane, regulatory_element, re_info):
+    sign = regulatory_element.trafficSigns()[-1]
+    ref_line = regulatory_element.refLines()
+
+    if 'lane_ids' not in re_info:
+        re_info['lane_ids'] = [lane.id]
+    else:
+        re_info['lane_ids'].append(lane.id)
+    point = sign[-1]
+    re_info['position'] = np.array([point.x, point.y, point.z])
+
+    if sign.attributes['subtype'] == 'stop_sign':
+        global_type = polyline_type['TYPE_STOP_SIGN']
+    re_polyline = np.array([point.x, point.y, point.z, 0, 0, 0, global_type]).reshape(1, 7)
+    return re_polyline
 
 
 def decode_map_features(map, routing_graph):
@@ -32,49 +51,92 @@ def decode_map_features(map, routing_graph):
         'state': [],
         'stop_point': []
     }
+
+    elem_id_to_info = defaultdict(dict)
+
     polylines = []
 
     data_cnt = 0
     polyline_cnt = 0
     for lane in lanes:
+        polyline_handled = False
         if 'subtype' not in lane.attributes:  # TODO: skip for now. If next lane is set, then it's a bike lane; otherwise, it's road edge
+            print("???????????", lane.attributes)
             continue
         if lane.attributes['subtype'] == 'walkway':  # skip walkway
             continue
 
-        cur_info = {'id': int(data_cnt)}
+        cur_info = elem_id_to_info[lane.id]
+        cur_info['id'] = int(data_cnt)
 
         if lane.attributes['subtype'] == 'crosswalk':
-            global_type = 18
+            global_type = polyline_type['TYPE_CROSSWALK']
             map_infos['crosswalk'].append(cur_info)
 
-        else:  # TODO: add stop sign, speed bump
-            cur_info['speed_limit_mph'] = 30.0  # TODO: need to check the parsed value in the map
-            cur_info['type'] = lane_type[2]  # 0: undefined, 1: freeway, 2: surface_street, 3: bike_lane
-            cur_info['interpolating'] = False  # TODO: after parsing all lanes, check "Next Lanelet" of each lane.
-            # TODO: If more than one, set interpolating to True for both
+            polygon = []
+            for pt in lane.leftBound:
+                polygon.append(pt)
+            for pt in lane.rightBound:
+                polygon.append(pt)
+            polygon.append(polygon[0])
 
-            # routing_graph.previous(lane): actually next lane
-            # routing_graph.following(lane): actually previous lane
-            cur_info['entry_lanes'] = [entry_lane.id for entry_lane in routing_graph.following(lane)]
-            cur_info['exit_lanes'] = [exit_lane.id for exit_lane in routing_graph.previous(lane)]
+            cur_polyline = np.array(
+                [(float(pt.attributes['local_x']), float(pt.attributes['local_y']), pt.z, global_type)
+                 for pt in polygon])
+            cur_polyline_dir = get_polyline_dir(cur_polyline[:, 0:3])
+            cur_polyline = np.concatenate((cur_polyline[:, 0:3], cur_polyline_dir, cur_polyline[:, 3:]), axis=-1)
+
+            polylines.append(cur_polyline)
+            cur_info['polyline_index'] = (polyline_cnt, polyline_cnt + len(cur_polyline))
+            polyline_cnt += len(cur_polyline)
+            data_cnt += 1
+            continue
+
+        else:  # vehicle lane
+            cur_info['speed_limit_mph'] = float(
+                lane.attributes['speed_limit'])
+            cur_info['type'] = 'TYPE_SURFACE_STREET'  # 0: undefined, 1: freeway, 2: surface_street, 3: bike_lane
+            if 'interpolating' not in cur_info:
+                cur_info['interpolating'] = False
+            cur_info['exit_lanes'] = [exit_lane.id for exit_lane in routing_graph.following(lane)]
+            if len(cur_info['exit_lanes']) > 1:
+                for exit_lane in cur_info['exit_lanes']:
+                    lane_info = elem_id_to_info[exit_lane]
+                    lane_info['interpolating'] = True
+            cur_info['entry_lanes'] = [entry_lane.id for entry_lane in routing_graph.previous(lane)]
+            if len(cur_info['entry_lanes']) > 1:
+                for entry_lane in cur_info['entry_lanes']:
+                    lane_info = elem_id_to_info[entry_lane]
+                    lane_info['interpolating'] = True
 
             left_boundary = lines[lane.leftBound.id]
             right_boundary = lines[lane.rightBound.id]
 
             cur_info['left_boundary'] = [{
                 'start_index': left_boundary[0].id, 'end_index': left_boundary[len(left_boundary) - 1].id,
-                'feature_id': 0,  # TODO: check ids in road_line or road_edge, one of the two
+                'feature_id': 0,
                 'boundary_type': 1  # roadline type
             }]
 
             cur_info['right_boundary'] = [{
                 'start_index': right_boundary[0].id, 'end_index': right_boundary[len(right_boundary) - 1].id,
-                'feature_id': 0,  # TODO: check ids in road_line or road_edge, one of the two
+                'feature_id': 0,
                 'boundary_type': 1  # roadline type
             }]
 
-            global_type = 2  # TODO: check
+            if len(lane.regulatoryElements) > 0:
+                for re in lane.regulatoryElements:
+                    re_polyline = decode_stop_sign(lane, re, elem_id_to_info[re.id])
+                    re_info = elem_id_to_info[re.id]
+                    data_cnt += 1
+                    re_info['id'] = int(data_cnt)
+                    map_infos['stop_sign'].append(re_info)
+
+                    polylines.append(re_polyline)
+                    re_info['polyline_index'] = (polyline_cnt, polyline_cnt + len(re_polyline))
+                    polyline_cnt += len(re_polyline)
+
+            global_type = polyline_type['TYPE_SURFACE_STREET']
             map_infos['lane'].append(cur_info)
 
         left_points = np.array(
@@ -84,6 +146,14 @@ def decode_map_features(map, routing_graph):
             [(float(pt.attributes['local_x']), float(pt.attributes['local_y']), pt.z, global_type) for pt in
              lane.rightBound])
 
+        if len(left_points) != len(right_points):  # TODO: use interpolation instead of repeat? (OK for now)
+            diff = abs(len(left_points) - len(right_points))
+            for _ in range(diff):
+                if len(left_points) > len(right_points):
+                    right_points = np.vstack((right_points, np.array(right_points[-1])))
+                else:
+                    left_points = np.vstack((left_points, np.array(left_points[-1])))
+
         cur_polyline = (left_points + right_points) / 2
 
         cur_polyline_dir = get_polyline_dir(cur_polyline[:, 0:3])
@@ -94,79 +164,63 @@ def decode_map_features(map, routing_graph):
         polyline_cnt += len(cur_polyline)
         data_cnt += 1
 
+    preprocessed_line_types = ['pedestrian_marking', 'stop_line', 'traffic_sign']
     for line in lines:  # TODO: need to check line or edge
-        if 'type' not in line.attributes or 'subtype' not in line.attributes:
+        has_subtype = True
+        if 'type' not in line.attributes:
+            print("Unknown line type: ", line.attributes)
+            continue
+        if line.attributes['type'] in preprocessed_line_types:
             continue
         if line.attributes['type'] == 'traffic_light':  # TODO: TBD
+            print("traffic light")
             continue
-        if line.attributes['type'] == 'traffic_sign':  # TODO: Check what the sign is
+        if line.attributes['type'] == 'virtual':  # handled
+            has_subtype = False
+        if line.attributes['type'] == 'road_border':  # handled
+            has_subtype = False
+
+        if has_subtype and 'subtype' not in line.attributes:
+            print("Unknown line subtype: ", line.attributes)
             continue
 
-        cur_info = {'id': str(data_cnt)}
-        osm_line_type = line.attributes['subtype']
-        if osm_line_type == 'dashed':
-            cur_info['type'] = road_line_type[1]
-            global_type = 6
-        elif osm_line_type == 'solid_solid':
-            cur_info['type'] = road_line_type[2]
-            global_type = 7
-        elif osm_line_type == 'solid_solid_solid_solid':
-            cur_info['type'] = road_line_type[6]
-            global_type = 11
+        cur_info = elem_id_to_info[line.id]
+        cur_info['id'] = int(data_cnt)
+
+        if line.attributes['type'] == 'road_border':
+            cur_info['type'] = 'TYPE_ROAD_EDGE_BOUNDARY'
+        elif line.attributes['type'] == 'virtual':
+            cur_info['type'] = 'TYPE_BROKEN_SINGLE_WHITE'
         else:
-            cur_info['type'] = road_line_type[0]
-            global_type = -1
+            osm_line_type = line.attributes['subtype']
+            if osm_line_type == 'dashed':
+                cur_info['type'] = 'TYPE_BROKEN_SINGLE_WHITE'
+            elif osm_line_type == 'solid':
+                cur_info['type'] = 'TYPE_SOLID_SINGLE_WHITE'
+            elif osm_line_type == 'solid_solid':
+                cur_info['type'] = 'TYPE_SOLID_SINGLE_YELLOW'
+            elif osm_line_type == 'solid_solid_solid_solid':
+                cur_info['type'] = 'TYPE_SOLID_DOUBLE_YELLOW'
+            else:
+                print("osm_line_type ", osm_line_type)
+                cur_info['type'] = 'TYPE_UNKNOWN'
 
-        left_points = np.array(
-            [(float(pt.attributes['local_x']), float(pt.attributes['local_y']), pt.z, global_type) for pt in
-             lane.leftBound])
-        right_points = np.array(
-            [(float(pt.attributes['local_x']), float(pt.attributes['local_y']), pt.z, global_type) for pt in
-             lane.rightBound])
-
-        cur_polyline = (left_points + right_points) / 2
+        global_type = polyline_type[cur_info['type']]
+        cur_polyline = np.array([(float(pt.attributes['local_x']), float(pt.attributes['local_y']), pt.z, global_type)
+                                 for pt in line])
 
         cur_polyline_dir = get_polyline_dir(cur_polyline[:, 0:3])
         cur_polyline = np.concatenate((cur_polyline[:, 0:3], cur_polyline_dir, cur_polyline[:, 3:]), axis=-1)
 
-        map_infos['road_line'].append(cur_info)
+        if line.attributes['type'] == 'road_border':
+            map_infos['road_edge'].append(cur_info)
+        else:
+            map_infos['road_line'].append(cur_info)
 
         polylines.append(cur_polyline)
         cur_info['polyline_index'] = (polyline_cnt, polyline_cnt + len(cur_polyline))
         polyline_cnt += len(cur_polyline)
         data_cnt += 1
-
-        # TODO: road edge is skipped for now
-        # cur_info['type'] = road_edge_type[cur_data.road_edge.type]
-        #
-        # global_type = polyline_type[cur_info['type']]
-        # cur_polyline = np.stack(
-        #     [np.array([point.x, point.y, point.z, global_type]) for point in cur_data.road_edge.polyline], axis=0)
-        # cur_polyline_dir = get_polyline_dir(cur_polyline[:, 0:3])
-        # cur_polyline = np.concatenate((cur_polyline[:, 0:3], cur_polyline_dir, cur_polyline[:, 3:]), axis=-1)
-        #
-        # map_infos['road_edge'].append(cur_info)
-
-    for reg in regulatories:
-        lane_id, state, stop_point = [], [], []
-        if reg.attributes['subtype'] == 'traffic_light':  # TODO: else: speed_limit, skipped
-            for traffic_light in reg.trafficLights:
-                a = 0
-
-        # dynamic_map_infos['lane_id'].append(np.array([lane_id]))
-        # dynamic_map_infos['state'].append(np.array([state]))
-        # dynamic_map_infos['stop_point'].append(np.array([stop_point]))
-
-    # for cur_data in dynamic_map_states:  # (num_timestamp)
-    #     lane_id, state, stop_point = [], [], []
-    #     for cur_signal in cur_data.lane_states:  # (num_observed_signals)
-    #         lane_id.append(cur_signal.lane)
-    #         state.append(signal_state[cur_signal.state])
-    #         stop_point.append([cur_signal.stop_point.x, cur_signal.stop_point.y, cur_signal.stop_point.z])
-    #
-    #     dynamic_map_infos['lane_id'].append(np.array([lane_id]))
-    #     dynamic_map_infos['state'].append(np.array([state]))
-    #     dynamic_map_infos['stop_point'].append(np.array([stop_point]))
 
     try:
         polylines = np.concatenate(polylines, axis=0).astype(np.float32)
