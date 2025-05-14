@@ -6,6 +6,49 @@ from carla_api.mpc.config import d_safe
 
 epsilon = 0.001
 
+def precompute_parking_exit_path(carla_map, start_location: carla.Location,
+                                 spacing: float = 0.12):
+       
+        start_wp = carla_map.get_waypoint(start_location, lane_type=carla.LaneType.Driving)
+
+        path = []
+        current_wp = start_wp
+
+        for i in range(400):
+            next_wps = current_wp.next(spacing)
+            if not next_wps:
+                break
+                
+            candidate = next_wps[0]
+            
+            if candidate.lane_type == carla.LaneType.Driving:
+        
+                current_wp = candidate
+                path.append((current_wp.transform.location.x,
+                 current_wp.transform.location.y))
+            else:
+                continue
+
+        return np.array(path)
+        
+
+
+def choose_ahead_waypoint(waypoints, pos, heading):
+   
+    rel = waypoints - pos                
+    fronts = rel.dot(heading) > 0       # positive means ahead
+    
+    try:
+        ahead_wps = waypoints[fronts]   
+        dists = np.linalg.norm(ahead_wps - pos, axis=1)
+        return ahead_wps, np.argmin(dists)
+        
+    except:
+        return False, False
+  
+    
+    
+
 def calculate_terminal_deviation(predicted_destination, destination):
 
     distance = (predicted_destination[0] - destination[0])**2 + (predicted_destination[1] - destination[1])**2
