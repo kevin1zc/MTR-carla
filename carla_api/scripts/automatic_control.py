@@ -30,7 +30,8 @@ from carla_api.agents.navigation.basic_agent import BasicAgent  # pylint: disabl
 from carla_api.agents.navigation.behavior_agent import BehaviorAgent  # pylint: disable=import-error
 from carla_api.agents.navigation.constant_velocity_agent import ConstantVelocityAgent  # pylint: disable=import-error
 from carla_api.mpc.mpc_solver import MpcController
-from carla_api.mpc.config import N, dt
+from carla_api.mpc.helper_functions import precompute_parking_exit_path, choose_ahead_waypoint
+from carla_api.mpc.config import N, dt, Follow_Agent
 from carla_api.utils.carla_utils import HUD, KeyboardControl
 from carla_api.utils.mtr_data_utils import create_scene_level_data, decode_map_features, generate_prediction_dicts
 from carla_api.utils.world import World
@@ -52,19 +53,20 @@ def game_loop(args):
     args.sync = True
     delta_t = 0.02
 
-    map_name = "Town12"
-
     if delta_t > 0.1:
         sys.exit(
             'Error: Delta_t must be no greater than 0.1s in accordance with MTR.')
 
     import sys
     print(sys.path, os.getcwd())
-    map = lanelet2.io.load(f"../../carla_maps/OSM/{map_name}.osm", lanelet2.io.Origin(0, 0))
+    map = lanelet2.io.load(
+        "./carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
     traffic_rules = lanelet2.traffic_rules.create(lanelet2.traffic_rules.Locations.Germany,
                                                   lanelet2.traffic_rules.Participants.Vehicle)
     routing_graph = RoutingGraph(map, traffic_rules)
 
+    #routing_graph.previous(map.laneletLayer[6135])  # actually next lane
+    #routing_graph.following(map.laneletLayer[6135])  # actually previous lane
     # also have left and right relations (in correct order)
 
     map_infos, dynamic_map_infos = decode_map_features(map, routing_graph)
@@ -134,31 +136,36 @@ def game_loop(args):
             agent.follow_speed_limits(True)
         elif args.agent == "Behavior":
             agent = BehaviorAgent(world.player, behavior=args.behavior, opt_dict={
-                                  'sampling_resolution': 0.3})
+                                  'sampling_resolution': 0.12})
 
-        # Set the agent destination
-        spawn_points = world.map.get_spawn_points()
-        f_destination = destination = random.choice(spawn_points).location
-        agent.set_destination(destination)
-        
-        #MERVE - delete later
         f_start_location_ = world.player.get_location()
-        wp0 = world.map.get_waypoint(f_start_location_)
-        wp30  = wp0.next(70.0)[0]           
-        goal  = wp30.transform.location
-  
-
-        # trace route from start to destination
-        f_start_location = start_location = world.player.get_location()
-        start_waypoint = world.map.get_waypoint(start_location)
-        #end_waypoint = world.map.get_waypoint(destination)
-        end_waypoint = wp30
-        trace = agent.trace_route(start_waypoint, end_waypoint)
+        
+        if Follow_Agent:
+            wp0 = world.map.get_waypoint(f_start_location_)
+            wp50  = wp0.next(300.0)[0]  
+                     
+            goal  = wp50.transform.location
+            agent.set_destination(carla.Location(goal.x, goal.y, 0))
+            trace = agent.trace_route(wp0, wp50)
+            route = []
+            for wp in trace:
+                route.append([wp[0].transform.location.x,
+                             wp[0].transform.location.y])
+            route = np.array(route)
+            
+        else:
+            route = precompute_parking_exit_path(carla_map=world.map, start_location=f_start_location_)
+            goal = route[-1]
+            agent.set_destination(carla.Location(goal[0], goal[1], 0))
+        
+        
+        
+        """trace = agent.trace_route(start_waypoint, end_waypoint)
         route = []
         for wp in trace:
             route.append([wp[0].transform.location.x,
                          wp[0].transform.location.y])
-        route = np.array(route)
+        route = np.array(route)"""
         # plt.plot(start_location.x, start_location.y, 'go')
         # plt.plot(destination.x, destination.y, 'ro')
         # plt.plot(route[:, 0], route[:, 1], 'b-')
@@ -168,12 +175,13 @@ def game_loop(args):
 
         throttle, brake, steer = 0, 0, 0
         
+        time_step = -1
+        
         mpc = MpcController(world.world, world.player, horizon=N, dt=dt)
         
+    
         run_flag = True
         
-        time_step = -1
-
         while run_flag:
             clock.tick()
             if args.sync:
@@ -189,6 +197,7 @@ def game_loop(args):
 
             if info is not None:
                 info['map_infos'] = map_infos
+               # info['dynamic_map_infos'] = dynamic_map_infos
                 ret_infos = create_scene_level_data(info, cfg.DATA_CONFIG)
                 batch_dict = {
                     'batch_size': 1,
@@ -224,29 +233,32 @@ def game_loop(args):
                 dyn_vehic_list = []
                 for i in range(1,len(final_pred_dicts)):
                     temp_vehic_index = np.argmax(final_pred_dicts[i]['pred_scores'])
-                    temp_traj = final_pred_dicts[i]['pred_trajs'][temp_vehic_index][: 10]
+                    temp_traj = final_pred_dicts[i]['pred_trajs'][temp_vehic_index][: N]
                     dyn_vehic_list.append(temp_traj)
 
                 # Get waypoints
-                current_location = np.array(
-                    [world.player.get_location().x, world.player.get_location().y])
-                closest_index = np.argmin(
-                    np.sum((route - current_location)**2, axis=1))
-                if closest_index == len(route) - 1:
-                    closest_k_waypoint = list(route[closest_index])
+                current_location = np.array([world.player.get_location().x, world.player.get_location().y])
+                current_velocity = np.sqrt(world.player.get_velocity().x**2 + world.player.get_velocity().y**2)
+                
+                if current_velocity <= 5:
+                    multiplier = 1.2
+                elif current_velocity <= 10:
+                    multiplier = 3.6
+                elif current_velocity <= 20:
+                    multiplier = 6.2
+                elif current_velocity <= 30:
+                    multiplier = 8
+                elif current_velocity <= 40:
+                    multiplier = 10
+                elif current_velocity <= 50:
+                    multiplier = 11
+                elif current_velocity <= 60:
+                    multiplier = 12
+                elif current_velocity <= 70:
+                    multiplier = 14
                 else:
-                    closest_k_waypoint = list(
-                        route[closest_index + 1: closest_index + 1 + 10])
-                        
-                
-                time_step += 1
-                
-                if time_step < 2:
-                    world.player.apply_control(carla.VehicleControl())
-                    continue
-                	
-                
-                start_time = time.time()
+                    multiplier = 14
+                    
                 
                 transform = world.player.get_transform()
                 x0 = transform.location.x
@@ -254,73 +266,92 @@ def game_loop(args):
                 yaw0 = np.deg2rad(transform.rotation.yaw)
                 v0 = np.sqrt(world.player.get_velocity().x**2 +
                     world.player.get_velocity().y**2)
+                
+            
+                fwd = transform.get_forward_vector()  
+                heading = np.array([fwd.x, fwd.y])
+                
+                
+                route_new, closest_index = choose_ahead_waypoint(waypoints=route, pos=current_location, heading=heading)
+                
+                
+                if route_new is not False:
+                    termi = int(N * multiplier)
+                    closest_k_waypoint = list(route_new[closest_index + 1: closest_index + 1 + termi])
+                else:
+                    closest_k_waypoint = list(route[-1])
+                    
+                route = route_new
+                
+                del route_new
+                
+
+                
+                time_step += 1
+                
+                """if time_step < 2:
+                    world.player.apply_control(carla.VehicleControl())
+                    continue"""
+                	
+                
+                start_time = time.time()
+
      
                 
                 temp_list = []
                 
                 if isinstance(closest_k_waypoint[-1], np.float64):
                     temp_list.append(closest_k_waypoint)
-                    waypoints = temp_list * 10
+                    waypoints = temp_list * N
                 else:
-                    waypoints = closest_k_waypoint if len(closest_k_waypoint) >= 10 else closest_k_waypoint + \
-                            [closest_k_waypoint[-1]] * (10 - len(closest_k_waypoint)) 
-                
-          
-                mpc.reset_solver(x0, y0, yaw0, v0, mpc.get_static_obstacles(np.array(pred_ego['pred_trajs'][traj_index][: 10])), \
-                		  waypoints)
-                
-                
-                mpc.update_cost_function((goal.x, goal.y), dyn_vehic_list)
+                    waypoints = closest_k_waypoint if len(closest_k_waypoint) >= N else closest_k_waypoint + \
+                            [closest_k_waypoint[-1]] * (N - len(closest_k_waypoint)) 
+     
+                mpc.reset_solver(x0, y0, yaw0, v0, mpc.get_static_obstacles(np.array(pred_ego['pred_trajs'][traj_index][: N])), \
+                		         mpc.get_static_obstacles_soft(np.array(pred_ego['pred_trajs'][traj_index][: N])), waypoints)
+               
+                mpc.update_cost_function(goal, dyn_vehic_list)
                 mpc.solve()
                 
-                wheel_angle, acceleration = mpc.get_controls_value()
-                print(f"Wheel angle: {wheel_angle}, Acceleration: {acceleration}")
-                throttle, brake, steer = mpc.process_control_inputs(wheel_angle, acceleration)
                 
-                end_time = time.time()
-                mpc_calculation_time = end_time - start_time
-                print(f"Calculation time of MPC controller: {mpc_calculation_time:.6f} seconds")
+                if mpc.is_success:
+                    print("is_success :", mpc.is_success)
+                    wheel_angle, acceleration = mpc.get_controls_value()
+                    throttle, brake, steer = mpc.process_control_inputs(wheel_angle, acceleration)
+                    print("throttle", throttle)
+                    print("brake", brake)
+                    control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
+                    #mpc.opti.debug.show_infeasibilities()
+                else:
+                    print("is_success : False")
+                    agent.set_destination(carla.Location(goal[0], goal[1], 0))
+                    control = agent.run_step()
+                    control.manual_gear_shift = False 
                 
-                time.sleep(max(0.1 - mpc_calculation_time, 0))
+                #end_time = time.time()
+                #mpc_calculation_time = end_time - start_time
+                #print(f"Calculation time of MPC controller: {mpc_calculation_time:.6f} seconds")
+           
                 
-                """control.steer = steer
-                control.throttle = throttle
-                control.brake = brake
-                control.manual_gear_shift = False
-                world.player.apply_control(control)"""
-                
-                world.player.apply_control(carla.VehicleControl(throttle=throttle, steer=steer, brake=brake))
-                mpc.opti.debug.show_infeasibilities()
+                world.player.apply_control(control)
+                #mpc.opti.debug.show_infeasibilities()
+             
                 
                 transform = world.player.get_transform()
                 x0 = transform.location.x
                 y0 = transform.location.y
-                yaw0 = np.deg2rad(transform.rotation.yaw)
-                v0 = np.sqrt(world.player.get_velocity().x**2 +
-                    world.player.get_velocity().y**2)
-                    
-                dest = (goal.x, goal.y)
+   
+                dest = (goal[0], goal[1])
                 
                 final_distance = (x0 - dest[0])**2 + (y0 - dest[1])**2
                 
-                if final_distance < 1.5:
+                if final_distance < 5.0:
                 
                     run_flag = False
                     print("Finished Successfully!")
 		
-		#mpc.opti.debug.show_infeasibilities()
+		
 
-            """    agent.set_destination(carla.Location(
-                    destination[0].item(), destination[1].item(), 0))
-
-            try:
-                control = agent.run_step()
-            except:
-                destination = pred_ego['pred_trajs'][traj_index][50]
-                agent.set_destination(carla.Location(
-                    destination[0].item(), destination[1].item(), 0))
-            print(
-                f"Applying Throttle: {throttle}, Brake: {brake}, Steer: {steer} at {clock.get_time()}") """
                 
 
     finally:
