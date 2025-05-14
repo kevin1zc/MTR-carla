@@ -52,20 +52,19 @@ def game_loop(args):
     args.sync = True
     delta_t = 0.02
 
+    map_name = "Town12"
+
     if delta_t > 0.1:
         sys.exit(
             'Error: Delta_t must be no greater than 0.1s in accordance with MTR.')
 
     import sys
     print(sys.path, os.getcwd())
-    map = lanelet2.io.load(
-        "./carla_maps/OSM/Town10HD.osm", lanelet2.io.Origin(0, 0))
+    map = lanelet2.io.load(f"../../carla_maps/OSM/{map_name}.osm", lanelet2.io.Origin(0, 0))
     traffic_rules = lanelet2.traffic_rules.create(lanelet2.traffic_rules.Locations.Germany,
                                                   lanelet2.traffic_rules.Participants.Vehicle)
     routing_graph = RoutingGraph(map, traffic_rules)
 
-    routing_graph.previous(map.laneletLayer[6135])  # actually next lane
-    routing_graph.following(map.laneletLayer[6135])  # actually previous lane
     # also have left and right relations (in correct order)
 
     map_infos, dynamic_map_infos = decode_map_features(map, routing_graph)
@@ -190,7 +189,6 @@ def game_loop(args):
 
             if info is not None:
                 info['map_infos'] = map_infos
-                info['dynamic_map_infos'] = dynamic_map_infos
                 ret_infos = create_scene_level_data(info, cfg.DATA_CONFIG)
                 batch_dict = {
                     'batch_size': 1,
