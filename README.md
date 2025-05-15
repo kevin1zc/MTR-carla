@@ -5,16 +5,10 @@
 4. Run `python3 setup.py develop`
 5. Run `python3 carla_api/scripts/automatic_control.py`
 
-# TODO list
-- [ ] Add information of bike lane
-- [ ] Add information of stop sign and speed bump
-- [ ] Check interpolating lanes
-- [ ] Check `feature_id` attribute in `left_boundary` and `right_boundary` of the lane
-- [ ] Check `global_type`
-- [ ] Distinguish between `road_line` and `road_edge`
-- [ ] Add information of traffic light
-- [x] Model output is incorrect. Probably caused by coordinate normalization
-- [ ] Carla crashes at junctions.
+# MPC notes
+- [ ] Minimum safe distance (`d_safe`) is too large. 0.5 should be enough.
+- [ ] `STAY ON THE ROAD` constraints: currently, it's computing the distance between the ego vehicle's position and the next waypoint, which is incorrect. Should check the deviation from lane center instead.
+- [ ] Cost function tries to minimize the distance between the ego vehicle and other closest vehicles, which doesn't make sense. Should just minimize the distance to the next waypoint, and leave safety distance to constraints.
 
 # Motion Transformer (MTR): A Strong Baseline for Multimodal Motion Prediction in Autonomous Driving
 
